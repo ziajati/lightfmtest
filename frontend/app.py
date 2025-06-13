@@ -5,8 +5,11 @@ import pickle
 import scipy.sparse
 import sys
 
-# set_page_config MUST be first
+# MUST be the first Streamlit command
 st.set_page_config(page_title="LightFM Recommender Dashboard", layout="wide")
+
+# Debug output (fine after set_page_config)
+st.write("✅ Python executable:", sys.executable)
 
 # More robust LightFM check
 lightfm_available = False
@@ -121,3 +124,6 @@ if model_file and metadata:
 
     except Exception as e:
         st.error(f"Failed to recommend: {e}")
+
+
+
