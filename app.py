@@ -4,126 +4,105 @@ import numpy as np
 import pickle
 import scipy.sparse
 import sys
+import os
 
-# MUST be the first Streamlit command
-st.set_page_config(page_title="LightFM Recommender Dashboard", layout="wide")
-
-# Debug output (fine after set_page_config)
+st.set_page_config(page_title="📚 LightFM Book Recommender", layout="wide")
+st.title("📚 Book Recommender Dashboard")
 st.write("✅ Python executable:", sys.executable)
 
-# More robust LightFM check
-lightfm_available = False
-try:
-    from lightfm import LightFM
-    lightfm_available = True
-except ImportError:
-    pass
-
-if not lightfm_available:
-    st.warning("⚠️ LightFM is not installed. Please run: pip install lightfm")
-
-st.title("🎯 LightFM Recommender Frontend")
-
-# Sidebar for file uploads
-st.sidebar.header("📂 Upload Model Files")
-metadata_file = st.sidebar.file_uploader("Upload model_metadata.json", type="json")
-mappings_file = st.sidebar.file_uploader("Upload reverse_mappings.json", type="json")
-embeddings_file = st.sidebar.file_uploader("Upload model_parameters.npz", type="npz")
-features_file = st.sidebar.file_uploader("Upload item_features.npz (optional)", type="npz")
-interactions_file = st.sidebar.file_uploader("Upload train_interactions.npz (optional)", type="npz")
+# Sidebar - Upload model assets
+st.sidebar.header("📂 Upload Exported Model Files")
 model_file = st.sidebar.file_uploader("Upload light_model.pkl", type="pkl")
+metadata_file = st.sidebar.file_uploader("Upload model_metadata.json", type="json")
+item_features_file = st.sidebar.file_uploader("Upload item_features.npz", type="npz")
+book_meta_file = st.sidebar.file_uploader("Upload book_metadata.json", type="json")
+interactions_file = st.sidebar.file_uploader("Upload train_interactions.npz (optional)", type="npz")
 
-# Load metadata
-metadata, mappings, embeddings_data = None, None, None
-n_users = n_items = 0
+# Load assets
+model, metadata, item_features, book_meta, interactions = None, {}, None, {}, None
+
+if model_file:
+    model = pickle.load(model_file)
+    st.sidebar.success("✅ Model loaded")
+
 if metadata_file:
-    try:
-        metadata_raw = metadata_file.read()
-        metadata_str = metadata_raw.decode('utf-8') if isinstance(metadata_raw, bytes) else metadata_raw
-        metadata = json.loads(metadata_str)
-    except Exception as e:
-        st.error(f"Failed to read metadata JSON: {e}")
-        metadata = {}
+    metadata = json.load(metadata_file)
+    st.sidebar.success("✅ Metadata loaded")
 
-    st.header("📊 Model Metadata")
-    st.json(metadata.get("model_info", {}))
-    n_users = metadata.get("model_info", {}).get("n_users", 0)
-    n_items = metadata.get("model_info", {}).get("n_items", 0)
+if item_features_file:
+    item_features = scipy.sparse.load_npz(item_features_file)
+    st.sidebar.success("✅ Item features loaded")
 
-# Load mappings
-if mappings_file:
-    try:
-        mappings = json.load(mappings_file)
-        st.header("🔁 User ID Mappings")
-        sample_users = list(mappings["id_to_user"].items())[:10]
-        st.write("Sample User IDs:", sample_users)
-    except Exception as e:
-        st.error(f"Failed to read mappings JSON: {e}")
+if book_meta_file:
+    book_meta = json.load(book_meta_file)
+    st.sidebar.success("✅ Book metadata loaded")
 
-# Load and show embeddings
-if embeddings_file:
-    try:
-        embeddings_data = np.load(embeddings_file)
-        st.header("🧠 Model Embeddings")
-        if 'user_embeddings' in embeddings_data:
-            st.write("User Embedding Shape:", embeddings_data['user_embeddings'].shape)
-        if 'item_embeddings' in embeddings_data:
-            st.write("Item Embedding Shape:", embeddings_data['item_embeddings'].shape)
-    except Exception as e:
-        st.error(f"Failed to load embeddings: {e}")
-
-# Show item features if provided
-if features_file:
-    try:
-        features_data = np.load(features_file)
-        st.header("📄 Item Features Matrix")
-        st.write("Keys in NPZ file:", features_data.files)
-        for k in features_data.files:
-            st.write(f"{k}: {features_data[k].shape}")
-    except Exception as e:
-        st.error(f"Could not load item features: {e}")
-
-# Load train interactions if provided
-interactions = None
 if interactions_file:
-    try:
-        inter_data = np.load(interactions_file)
-        st.header("📈 Train Interaction Matrix")
-        st.write("Keys in NPZ file:", inter_data.files)
-        if {'data', 'row', 'col', 'shape'}.issubset(inter_data.files):
-            interactions = scipy.sparse.coo_matrix((inter_data['data'], (inter_data['row'], inter_data['col'])), shape=inter_data['shape'])
-            st.write("Shape:", interactions.shape)
-            st.write("Non-zero interactions:", interactions.nnz)
-        else:
-            st.warning("Expected keys 'data', 'row', 'col', 'shape' not found in uploaded file.")
-    except Exception as e:
-        st.error(f"Failed to load train interactions: {e}")
+    interactions = scipy.sparse.load_npz(interactions_file)
+    st.sidebar.success("✅ Interactions loaded")
 
-# Recommender system interface
-if model_file and metadata:
-    st.header("🤖 Make Recommendations")
-    try:
-        model = pickle.load(model_file)
+# Recommendation Interface
+if model is not None and metadata and item_features is not None and book_meta:
+    st.header("🎯 Get Recommendations")
+    user_input = st.text_input("Enter User ID:")
+    book_input = st.text_input("Enter Book ID (to find similar books):")
 
-        user_input = st.text_input("Enter User ID (as string)", "0")
-        if metadata and "user_mapping" in metadata and user_input in metadata["user_mapping"]:
-            user_id = metadata["user_mapping"][user_input]
-            scores = model.predict(user_id, np.arange(n_items))
-            top_items = np.argsort(-scores)[:10]
+    user_mapping = metadata.get("user_mapping", {})
+    item_mapping = metadata.get("item_mapping", {})
+    reverse_item_mapping = {v: k for k, v in item_mapping.items()}
 
-            st.subheader(f"Top 10 Recommendations for User {user_input}")
-            st.write(top_items.tolist())
+    # Recommend for user
+    if user_input and user_input.isdigit():
+        user_id = int(user_input)
+        if str(user_id) in user_mapping:
+            internal_uid = user_mapping[str(user_id)]
+            n_items = item_features.shape[0]
+            scores = model.predict(internal_uid, np.arange(n_items), item_features=item_features)
 
-            # Show historical interactions
             if interactions is not None:
-                user_interacted_items = interactions.getrow(user_id).indices
-                st.caption("Previously interacted item IDs:")
-                st.write(user_interacted_items.tolist())
+                known_items = set(interactions.tocsr()[internal_uid].indices)
+            else:
+                known_items = set()
+
+            ranked = [(score, i) for i, score in enumerate(scores) if i not in known_items and i in reverse_item_mapping]
+            ranked.sort(reverse=True)
+            top_n = ranked[:10]
+
+            st.subheader(f"📬 Top Recommendations for User {user_id}")
+            for i, (score, iid) in enumerate(top_n, 1):
+                book_id = reverse_item_mapping.get(iid)
+                meta = book_meta.get(str(book_id), {})
+                st.markdown(f"**{i}. {meta.get('title', 'Unknown Title')}**")
+                st.caption(f"Author: {meta.get('author', '?')} | Rating: {meta.get('avg_rating', '?')} | ID: {book_id} | Score: {score:.4f}")
         else:
-            st.warning("Please enter a valid User ID from the mapping.")
+            st.warning("⚠️ User ID not found in training data.")
 
-    except Exception as e:
-        st.error(f"Failed to recommend: {e}")
+    # Find similar books
+    if book_input and book_input.isdigit():
+        book_id = int(book_input)
+        if str(book_id) in item_mapping:
+            internal_bid = item_mapping[str(book_id)]
+            emb = model.item_embeddings
+            query_vec = emb[internal_bid].reshape(1, -1)
+            sims = emb @ query_vec.T
+            scores = sims.flatten()
 
+            ranked = [(score, i) for i, score in enumerate(scores) if i != internal_bid and i in reverse_item_mapping]
+            ranked.sort(reverse=True)
+            top_n = ranked[:10]
 
+            query_meta = book_meta.get(str(book_id), {})
+            st.subheader(f"🔍 Books Similar to: {query_meta.get('title', '?')}")
+            st.markdown(f"**📖 Target Book**")
+            st.caption(f"Title: {query_meta.get('title', '?')}\n\nAuthor: {query_meta.get('author', '?')} | Rating: {query_meta.get('avg_rating', '?')} | ID: {book_id}")
 
+            for i, (score, iid) in enumerate(top_n, 1):
+                similar_id = reverse_item_mapping.get(iid)
+                if similar_id is not None:
+                    meta = book_meta.get(str(similar_id), {})
+                    st.markdown(f"**{i}. {meta.get('title', 'Unknown')}**")
+                    st.caption(f"Author: {meta.get('author', '?')} | Rating: {meta.get('avg_rating', '?')} | ID: {similar_id} | Similarity: {score:.4f}")
+        else:
+            st.warning("⚠️ Book ID not found in training data.")
+else:
+    st.info("👆 Upload all required files to begin.")
